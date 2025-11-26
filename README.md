@@ -1,36 +1,171 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SanBernard 🏔️
 
-## Getting Started
+**AI-Powered GPX Route Time Estimator with Weather Analysis**
 
-First, run the development server:
+A modern web application that predicts hiking and walking times based on your GPX routes, incorporating terrain analysis, elevation changes, weather conditions, and your personal pace from historical activities.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+![SanBernard Preview](https://via.placeholder.com/800x400?text=SanBernard+3D+Globe+View)
+
+## ✨ Features
+
+- **3D Globe Visualization** - View your routes on an interactive CesiumJS globe with terrain
+- **Smart Time Estimation** - Uses Naismith's Rule with modern modifications for accurate predictions
+- **Weather Integration** - Real-time weather forecasts along your route from Open-Meteo API
+- **Terrain Analysis** - Gradient-based speed adjustments for uphill, downhill, and technical sections
+- **Personal Pace Learning** - Upload past activities to calibrate predictions to your fitness level
+- **Garmin Connect** - Import activities directly from your Garmin account
+- **Beautiful Dark UI** - Modern tech-style interface with glowing accents
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Node.js 18+ 
+- Python 3.10+
+- npm or yarn
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/sanbernard.git
+   cd sanbernard/src
+   ```
+
+2. **Install frontend dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Set up Python backend**
+   ```bash
+   cd backend
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+### Running the Application
+
+1. **Start the Python backend** (Terminal 1)
+   ```bash
+   cd backend
+   source venv/bin/activate
+   python app.py
+   ```
+   The API will be available at `http://localhost:5000`
+
+2. **Start the Next.js frontend** (Terminal 2)
+   ```bash
+   npm run dev
+   ```
+   The app will be available at `http://localhost:3000`
+
+## 🗺️ How It Works
+
+### Time Estimation Algorithm
+
+SanBernard uses a modified version of **Naismith's Rule** combined with modern hiking research:
+
+1. **Base Speed**: 5 km/h on flat terrain
+2. **Ascent Penalty**: +10 minutes per 100m of elevation gain
+3. **Gradient Factor**: Exponential slowdown for steep uphills, slight speedup for moderate downhills
+4. **Weather Factor**: Adjustments for wind, rain, snow, and extreme temperatures
+
+### Weather Impact
+
+| Condition | Impact |
+|-----------|--------|
+| Strong wind (>50 km/h) | +40% time |
+| Heavy rain | +30% time |
+| Deep snow (>30cm) | +100% time |
+| Extreme cold (<-10°C) | +30% time |
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **Next.js 16** - React framework with App Router
+- **TypeScript** - Type-safe development
+- **Tailwind CSS** - Utility-first styling
+- **CesiumJS** - 3D globe visualization
+- **Lucide React** - Beautiful icons
+
+### Backend
+- **Flask** - Python web framework
+- **gpxpy** - GPX file parsing
+- **httpx** - Modern async HTTP client
+- **garth** - Garmin Connect API wrapper
+- **NumPy** - Numerical calculations
+
+### APIs
+- **Open-Meteo** - Free, high-accuracy weather data (perfect for alpine environments)
+- **Cesium Ion** - Terrain and imagery tiles
+- **Garmin Connect** - Activity history (optional)
+
+## 📁 Project Structure
+
+```
+src/
+├── backend/
+│   ├── app.py              # Flask API application
+│   ├── requirements.txt    # Python dependencies
+│   └── venv/               # Python virtual environment
+├── src/
+│   ├── app/
+│   │   ├── page.tsx        # Main application page
+│   │   ├── layout.tsx      # Root layout
+│   │   └── globals.css     # Global styles
+│   ├── components/
+│   │   ├── Header.tsx      # App header
+│   │   ├── Sidebar.tsx     # File upload & settings
+│   │   ├── CesiumGlobe.tsx # 3D globe component
+│   │   └── RoutePanel.tsx  # Route details overlay
+│   └── types/
+│       └── index.ts        # TypeScript types
+├── package.json
+└── next.config.ts
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 🔧 API Endpoints
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/parse-gpx` | POST | Parse GPX file and estimate times |
+| `/api/weather` | POST | Get weather data for route points |
+| `/api/analyze-history` | POST | Analyze past GPX files for pace factor |
+| `/api/garmin/connect` | POST | Connect to Garmin account |
+| `/api/garmin/activity/:id/gpx` | GET | Download GPX from Garmin |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🎨 Customization
 
-## Learn More
+### Theme Variables
 
-To learn more about Next.js, take a look at the following resources:
+The app uses CSS custom properties for theming. Edit `src/app/globals.css`:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```css
+:root {
+  --background: #0a0a0a;
+  --accent: #00d4ff;
+  --accent-secondary: #7c3aed;
+  /* ... */
+}
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Cesium Ion Token
 
-## Deploy on Vercel
+For production, get your own token from [Cesium Ion](https://cesium.com/ion/tokens) and update `CesiumGlobe.tsx`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 📄 License
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT License - feel free to use this project for personal or commercial purposes.
+
+## 🙏 Acknowledgments
+
+- [Open-Meteo](https://open-meteo.com/) for free weather data
+- [CesiumJS](https://cesium.com/) for 3D globe visualization
+- [Garth](https://github.com/matin/garth) for Garmin Connect integration
+
+---
+
+Made with ❤️ for hikers, runners, and mountain lovers

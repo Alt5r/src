@@ -1,0 +1,8 @@
+flask==3.1.2
+flask-cors==6.0.1
+gpxpy==1.6.2
+httpx==0.28.1
+numpy==2.3.5
+python-dateutil==2.9.0.post0
+garth==0.5.19
+pydantic==2.12.4

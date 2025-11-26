@@ -9,9 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@turf/turf": "^7.3.0",
+    "cesium": "^1.135.0",
+    "gpxparser": "^3.0.8",
+    "lucide-react": "^0.555.0",
     "next": "16.0.4",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "react-dropzone": "^14.3.8",
+    "resium": "^1.19.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
