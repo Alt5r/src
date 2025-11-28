@@ -21,8 +21,25 @@ export interface WeatherData {
   description: string;
 }
 
+export interface WeatherSegment {
+  lat: number;
+  lon: number;
+  temperature: number;
+  precipitation: number;
+  wind_speed: number;
+  wind_direction: number;
+  snow_depth: number;
+  weather_code: number;
+  description: string;
+  has_rain: boolean;
+  has_snow: boolean;
+  has_wind: boolean;
+  distance_from_start: number;
+}
+
 export interface WeatherSummary {
   available: boolean;
+  segments?: WeatherSegment[];
   temp_range?: {
     min: number;
     max: number;
@@ -30,6 +47,7 @@ export interface WeatherSummary {
   max_wind?: number;
   total_precipitation?: number;
   has_snow?: boolean;
+  has_rain?: boolean;
   conditions?: string[];
 }
 

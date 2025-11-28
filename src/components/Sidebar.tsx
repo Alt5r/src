@@ -18,27 +18,66 @@ import {
   TrendingUp,
   Snowflake,
   X,
+  Sun,
+  CloudSnow,
+  Loader2,
+  AlertTriangle,
+  Zap,
+  Cloud,
 } from "lucide-react";
-import { RouteData } from "@/types";
+import { RouteData, RoutePoint } from "@/types";
 
 interface SidebarProps {
   onFileUpload: (file: File) => void;
   isLoading: boolean;
+  isLoadingWeather: boolean;
   routeData: RouteData | null;
   paceFactor: number;
   onPaceFactorChange: (factor: number) => void;
   startTime: Date;
   onStartTimeChange: (time: Date) => void;
+  onFetchWeather: (points: RoutePoint[]) => void;
 }
+
+// Default Helvellyn route points for weather fetching when no route is uploaded
+// More sample points along the route for better weather coverage
+const DEFAULT_ROUTE_POINTS: RoutePoint[] = [
+  // Start at Glenridding
+  { lat: 54.543984, lon: -2.949429, elevation: 152, distance_from_start: 0, estimated_time: 0 },
+  // Early climb
+  { lat: 54.541020, lon: -2.965443, elevation: 268, distance_from_start: 1310, estimated_time: 943 },
+  // Birkhouse Moor
+  { lat: 54.535560, lon: -2.977377, elevation: 575, distance_from_start: 2530, estimated_time: 1821 },
+  // Striding Edge approach
+  { lat: 54.532050, lon: -2.990316, elevation: 694, distance_from_start: 3720, estimated_time: 2678 },
+  // Striding Edge
+  { lat: 54.527692, lon: -2.998023, elevation: 774, distance_from_start: 4540, estimated_time: 3268 },
+  // Near summit
+  { lat: 54.526122, lon: -3.015018, elevation: 916, distance_from_start: 6000, estimated_time: 4318 },
+  // Helvellyn Summit
+  { lat: 54.527520, lon: -3.018688, elevation: 941, distance_from_start: 6350, estimated_time: 4570 },
+  // Swirral Edge descent
+  { lat: 54.530159, lon: -3.015856, elevation: 854, distance_from_start: 6800, estimated_time: 4893 },
+  // Red Tarn area
+  { lat: 54.530832, lon: -3.006457, elevation: 730, distance_from_start: 7620, estimated_time: 5481 },
+  // Lower descent
+  { lat: 54.538034, lon: -2.996105, elevation: 497, distance_from_start: 9060, estimated_time: 6513 },
+  // Approaching Glenridding
+  { lat: 54.544775, lon: -2.990550, elevation: 378, distance_from_start: 9930, estimated_time: 7137 },
+  // End at Glenridding
+  { lat: 54.544004, lon: -2.949354, elevation: 153, distance_from_start: 13350, estimated_time: 9586 },
+];
 
 export default function Sidebar({
   onFileUpload,
   isLoading,
+  isLoadingWeather,
   routeData,
   paceFactor,
   onPaceFactorChange,
   startTime,
   onStartTimeChange,
+  onFetchWeather,
 }: SidebarProps) {
   const [showGarminModal, setShowGarminModal] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -66,6 +105,79 @@ export default function Sidebar({
       return `${(meters / 1000).toFixed(1)} km`;
     }
     return `${Math.round(meters)} m`;
+  };
+
+  // Handle weather fetch for current or default route
+  const handleFetchWeather = () => {
+    // If no uploaded route, use the full default Helvellyn route points for better weather coverage
+    const points = routeData?.points || DEFAULT_ROUTE_POINTS;
+    console.log("Fetching weather for", points.length, "route points");
+    onFetchWeather(points);
+  };
+
+  // Calculate weather impact on pace
+  const getWeatherImpact = () => {
+    if (!routeData?.weatherSummary?.available) return null;
+    
+    const summary = routeData.weatherSummary;
+    let impactFactor = 1.0;
+    const impacts: { factor: string; description: string; severity: "low" | "medium" | "high" }[] = [];
+
+    // Wind impact
+    if (summary.max_wind && summary.max_wind > 50) {
+      impactFactor *= 1.4;
+      impacts.push({ factor: "+40%", description: "Strong winds", severity: "high" });
+    } else if (summary.max_wind && summary.max_wind > 30) {
+      impactFactor *= 1.2;
+      impacts.push({ factor: "+20%", description: "Moderate winds", severity: "medium" });
+    } else if (summary.max_wind && summary.max_wind > 15) {
+      impactFactor *= 1.1;
+      impacts.push({ factor: "+10%", description: "Light winds", severity: "low" });
+    }
+
+    // Precipitation impact
+    if (summary.total_precipitation && summary.total_precipitation > 5) {
+      impactFactor *= 1.3;
+      impacts.push({ factor: "+30%", description: "Heavy rain", severity: "high" });
+    } else if (summary.total_precipitation && summary.total_precipitation > 1) {
+      impactFactor *= 1.15;
+      impacts.push({ factor: "+15%", description: "Light rain", severity: "medium" });
+    }
+
+    // Snow impact
+    if (summary.has_snow) {
+      impactFactor *= 1.5;
+      impacts.push({ factor: "+50%", description: "Snow conditions", severity: "high" });
+    }
+
+    // Temperature impact
+    if (summary.temp_range) {
+      if (summary.temp_range.min < -10) {
+        impactFactor *= 1.3;
+        impacts.push({ factor: "+30%", description: "Extreme cold", severity: "high" });
+      } else if (summary.temp_range.min < 0) {
+        impactFactor *= 1.1;
+        impacts.push({ factor: "+10%", description: "Cold temperatures", severity: "low" });
+      } else if (summary.temp_range.max > 30) {
+        impactFactor *= 1.15;
+        impacts.push({ factor: "+15%", description: "High heat", severity: "medium" });
+      }
+    }
+
+    return { impactFactor, impacts };
+  };
+
+  const weatherImpact = getWeatherImpact();
+
+  // Get weather icon based on conditions
+  const getWeatherIcon = () => {
+    if (!routeData?.weatherSummary?.available) return <Cloud className="w-5 h-5" />;
+    const conditions = routeData.weatherSummary.conditions || [];
+    
+    if (conditions.some(c => c.toLowerCase().includes("snow"))) return <CloudSnow className="w-5 h-5" />;
+    if (conditions.some(c => c.toLowerCase().includes("rain"))) return <CloudRain className="w-5 h-5" />;
+    if (conditions.some(c => c.toLowerCase().includes("clear"))) return <Sun className="w-5 h-5" />;
+    return <Cloud className="w-5 h-5" />;
   };
 
   if (isCollapsed) {
@@ -206,6 +318,106 @@ export default function Sidebar({
           </div>
         </div>
 
+        {/* Weather Panel - Always visible */}
+        <div className="liquid-glass rounded-3xl p-5 animate-slide-up" style={{ animationDelay: "0.15s" }}>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Alpine Weather</h3>
+            {routeData?.weatherSummary?.available && (
+              <div className="flex items-center gap-1 text-cyan-400">
+                {getWeatherIcon()}
+              </div>
+            )}
+          </div>
+
+          {/* Fetch Weather Button */}
+          <button
+            onClick={handleFetchWeather}
+            disabled={isLoadingWeather}
+            className="w-full mb-4 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500/20 to-cyan-500/20 hover:from-blue-500/30 hover:to-cyan-500/30 border border-cyan-500/20 hover:border-cyan-500/40 transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoadingWeather ? (
+              <>
+                <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+                <span className="text-sm text-white/80">Fetching weather...</span>
+              </>
+            ) : (
+              <>
+                <CloudRain className="w-4 h-4 text-cyan-400 group-hover:text-cyan-300" />
+                <span className="text-sm text-white/80 group-hover:text-white">
+                  {routeData?.weatherSummary?.available ? "Refresh Weather" : "Fetch Weather Data"}
+                </span>
+              </>
+            )}
+          </button>
+
+          {/* Weather Status Display - Minimal */}
+          {routeData?.weatherSummary?.available ? (
+            <div className="py-3">
+              <div className="flex items-center gap-2 text-sm text-green-400">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                <span>Weather overlay active</span>
+              </div>
+              <p className="text-xs text-white/50 mt-2">
+                {routeData.weatherSummary.segments?.length || 0} weather segments visualized on map
+              </p>
+
+              {/* Pace Impact Analysis */}
+              {weatherImpact && weatherImpact.impacts.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-white/10">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Zap className="w-4 h-4 text-yellow-400" />
+                    <h4 className="text-xs font-semibold text-white/60 uppercase tracking-wider">Pace Impact</h4>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {weatherImpact.impacts.map((impact, i) => (
+                      <div key={i} className={`flex items-center justify-between py-2 px-3 rounded-xl ${
+                        impact.severity === "high" ? "bg-red-500/10 border border-red-500/20" :
+                        impact.severity === "medium" ? "bg-yellow-500/10 border border-yellow-500/20" :
+                        "bg-green-500/10 border border-green-500/20"
+                      }`}>
+                        <span className="text-xs text-white/70">{impact.description}</span>
+                        <span className={`text-xs font-mono ${
+                          impact.severity === "high" ? "text-red-400" :
+                          impact.severity === "medium" ? "text-yellow-400" :
+                          "text-green-400"
+                        }`}>{impact.factor}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Total Impact Summary */}
+                  <div className="mt-3 p-3 rounded-xl bg-gradient-to-r from-purple-500/10 to-cyan-500/10 border border-white/10">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-white/70">Adjusted Time Factor</span>
+                      <span className={`text-lg font-bold ${
+                        weatherImpact.impactFactor > 1.3 ? "text-red-400" :
+                        weatherImpact.impactFactor > 1.1 ? "text-yellow-400" :
+                        "text-green-400"
+                      }`}>
+                        {weatherImpact.impactFactor.toFixed(2)}x
+                      </span>
+                    </div>
+                    {weatherImpact.impactFactor > 1.2 && (
+                      <div className="flex items-center gap-2 mt-2 text-yellow-400">
+                        <AlertTriangle className="w-3 h-3" />
+                        <span className="text-xs">Challenging conditions expected</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-4">
+              <Cloud className="w-8 h-8 text-white/20 mx-auto mb-2" />
+              <p className="text-xs text-white/40">
+                Click above to fetch real-time alpine weather data from Open-Meteo
+              </p>
+            </div>
+          )}
+        </div>
+
         {/* Route Stats Panel */}
         {routeData && (
           <div className="liquid-glass rounded-3xl p-5 flex-1 overflow-y-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
@@ -237,37 +449,6 @@ export default function Sidebar({
                 color="orange"
               />
             </div>
-
-            {/* Weather Summary */}
-            {routeData.weatherSummary?.available && (
-              <div className="mt-4 pt-4 border-t border-white/10">
-                <h4 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-3">Weather</h4>
-                <div className="space-y-2">
-                  <WeatherRow
-                    icon={<Thermometer className="w-4 h-4" />}
-                    label="Temperature"
-                    value={`${routeData.weatherSummary.temp_range?.min?.toFixed(0)}° - ${routeData.weatherSummary.temp_range?.max?.toFixed(0)}°C`}
-                  />
-                  <WeatherRow
-                    icon={<Wind className="w-4 h-4" />}
-                    label="Max Wind"
-                    value={`${routeData.weatherSummary.max_wind?.toFixed(0)} km/h`}
-                  />
-                  <WeatherRow
-                    icon={<CloudRain className="w-4 h-4" />}
-                    label="Precipitation"
-                    value={`${routeData.weatherSummary.total_precipitation?.toFixed(1)} mm`}
-                  />
-                  {routeData.weatherSummary.has_snow && (
-                    <WeatherRow
-                      icon={<Snowflake className="w-4 h-4 text-cyan-300" />}
-                      label="Snow"
-                      value="Expected"
-                    />
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -335,7 +516,7 @@ function GarminModal({ onClose }: { onClose: () => void }) {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:5000/api/garmin/connect", {
+      const response = await fetch("http://127.0.0.1:5000/api/garmin/connect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -166,6 +166,54 @@ function formatTime(seconds: number): string {
   return `${minutes}m`;
 }
 
+// Create a canvas for wind arrow visualization
+function createWindArrowCanvas(windSpeed: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  const size = 64;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx) return canvas;
+
+  const centerX = size / 2;
+  const centerY = size / 2;
+
+  // Draw arrow shaft
+  ctx.strokeStyle = 'rgba(150, 150, 150, 0.9)';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY + 20);
+  ctx.lineTo(centerX, centerY - 15);
+  ctx.stroke();
+
+  // Draw arrowhead
+  ctx.fillStyle = 'rgba(150, 150, 150, 0.9)';
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY - 20);
+  ctx.lineTo(centerX - 8, centerY - 10);
+  ctx.lineTo(centerX + 8, centerY - 10);
+  ctx.closePath();
+  ctx.fill();
+
+  // Add wind speed indicator (length of tail)
+  if (windSpeed > 30) {
+    ctx.beginPath();
+    ctx.moveTo(centerX - 5, centerY + 10);
+    ctx.lineTo(centerX - 12, centerY + 15);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(centerX + 5, centerY + 10);
+    ctx.lineTo(centerX + 12, centerY + 15);
+    ctx.stroke();
+  }
+
+  return canvas;
+}
+
 export default function CesiumGlobe({
   routeData,
   selectedPointIndex,
@@ -176,6 +224,7 @@ export default function CesiumGlobe({
   const routeEntityRef = useRef<any>(null);
   const glowEntityRef = useRef<any>(null);
   const pointEntitiesRef = useRef<any[]>([]);
+  const weatherEntitiesRef = useRef<any[]>([]);
   const [cesiumLoaded, setCesiumLoaded] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -293,6 +342,10 @@ export default function CesiumGlobe({
         viewer.scene.globe.showGroundAtmosphere = true;
         viewer.scene.globe.depthTestAgainstTerrain = true;
 
+        // Enable clock for animations (needed for snow/rain particle animations)
+        viewer.clock.shouldAnimate = true;
+        viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
+
         // Enable mouse zoom with scroll wheel
         viewer.scene.screenSpaceCameraController.enableZoom = true;
         viewer.scene.screenSpaceCameraController.zoomEventTypes = [
@@ -300,9 +353,27 @@ export default function CesiumGlobe({
           Cesium.CameraEventType.PINCH,
         ];
 
-        // Set initial camera to Helvellyn area (Lake District)
+        // Set initial camera based on route bounds or default location
+        const initialBounds = activeRoute.bounds || HELVELLYN_ROUTE.bounds;
+        let centerLon = -2.984152;  // Default Helvellyn center
+        let centerLat = 54.536135;
+        let altitude = 15000;
+
+        if (initialBounds) {
+          centerLon = (initialBounds.min_lon + initialBounds.max_lon) / 2;
+          centerLat = (initialBounds.min_lat + initialBounds.max_lat) / 2;
+
+          // Calculate altitude to fit entire route in view
+          const latDiff = initialBounds.max_lat - initialBounds.min_lat;
+          const lonDiff = initialBounds.max_lon - initialBounds.min_lon;
+          const maxDiff = Math.max(latDiff, lonDiff);
+
+          // Altitude in meters - scale based on route size
+          altitude = Math.max(5000, maxDiff * 150000);
+        }
+
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(-2.96, 54.53, 15000),
+          destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, altitude),
           orientation: {
             heading: Cesium.Math.toRadians(0),
             pitch: Cesium.Math.toRadians(-45),
@@ -356,6 +427,9 @@ export default function CesiumGlobe({
   // Draw route when data changes
   useEffect(() => {
     if (!viewerRef.current || !viewerReady || !activeRoute?.points?.length) return;
+
+    console.log("CesiumGlobe: Drawing route with", activeRoute.points.length, "points");
+    console.log("CesiumGlobe: Points with weather:", activeRoute.points.filter(p => p.weather).length);
 
     const Cesium = window.Cesium;
     const viewer = viewerRef.current;
@@ -441,7 +515,7 @@ export default function CesiumGlobe({
         routeEntityRef.current = viewer.entities.add({
           polyline: {
             positions: positions,
-            width: 6,
+            width: 3,
             material: Cesium.Color.RED,
             clampToGround: false,
             arcType: Cesium.ArcType.NONE,
@@ -452,7 +526,7 @@ export default function CesiumGlobe({
         glowEntityRef.current = viewer.entities.add({
           polyline: {
             positions: positions,
-            width: 12,
+            width: 8,
             material: Cesium.Color.RED.withAlpha(0.3),
             clampToGround: false,
             arcType: Cesium.ArcType.NONE,
@@ -470,7 +544,7 @@ export default function CesiumGlobe({
         routeEntityRef.current = viewer.entities.add({
           polyline: {
             positions: positions,
-            width: 6,
+            width: 3,
             material: Cesium.Color.RED,
             clampToGround: false,
             arcType: Cesium.ArcType.NONE,
@@ -480,7 +554,7 @@ export default function CesiumGlobe({
         glowEntityRef.current = viewer.entities.add({
           polyline: {
             positions: positions,
-            width: 12,
+            width: 8,
             material: Cesium.Color.RED.withAlpha(0.3),
             clampToGround: false,
             arcType: Cesium.ArcType.NONE,
@@ -490,20 +564,21 @@ export default function CesiumGlobe({
 
     // Add waypoints at intervals
     const waypointInterval = Math.max(1, Math.floor(activeRoute.points.length / 20));
-    
+
     activeRoute.points.forEach((point, index) => {
-      const isKeyPoint = index === 0 || 
-                        index === activeRoute.points.length - 1 || 
+      const isKeyPoint = index === 0 ||
+                        index === activeRoute.points.length - 1 ||
                         index % waypointInterval === 0;
-      
+
       if (isKeyPoint) {
-        const gradient = point.gradient || 0;
-        let color = Cesium.Color.fromCssColorString("#00d4ff");
-        
-        if (gradient > 15) {
-          color = Cesium.Color.fromCssColorString("#ef4444");
-        } else if (gradient > 8) {
-          color = Cesium.Color.fromCssColorString("#f59e0b");
+        // Color based on weather data availability
+        let color: any;
+        if (point.weather) {
+          // Purple for points with weather data
+          color = Cesium.Color.fromCssColorString("#a855f7");
+        } else {
+          // Blue for points without weather data
+          color = Cesium.Color.fromCssColorString("#00d4ff");
         }
 
         const entity = viewer.entities.add({
@@ -556,9 +631,17 @@ export default function CesiumGlobe({
       const bounds = activeRoute.bounds;
       const centerLon = (bounds.min_lon + bounds.max_lon) / 2;
       const centerLat = (bounds.min_lat + bounds.max_lat) / 2;
-      
+
+      // Calculate altitude to fit entire route in view
+      const latDiff = bounds.max_lat - bounds.min_lat;
+      const lonDiff = bounds.max_lon - bounds.min_lon;
+      const maxDiff = Math.max(latDiff, lonDiff);
+
+      // Altitude in meters - scale based on route size
+      const altitude = Math.max(5000, maxDiff * 150000);
+
       viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 8000),
+        destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, altitude),
         orientation: {
           heading: Cesium.Math.toRadians(0),
           pitch: Cesium.Math.toRadians(-50),
@@ -569,6 +652,235 @@ export default function CesiumGlobe({
       });
     }
   }, [activeRoute, viewerReady]);
+
+  // Add weather visualizations (wind, rain, snow)
+  useEffect(() => {
+    if (!viewerRef.current || !viewerReady || !activeRoute?.weatherSummary?.available) return;
+
+    const Cesium = window.Cesium;
+    const viewer = viewerRef.current;
+    const segments = activeRoute.weatherSummary?.segments || [];
+
+    // Clear existing weather entities
+    weatherEntitiesRef.current.forEach((entity) => {
+      viewer.entities.remove(entity);
+    });
+    weatherEntitiesRef.current = [];
+
+    console.log("Adding weather visualizations for", segments.length, "segments");
+
+    if (segments.length === 0) {
+      console.warn("No weather segments available to visualize");
+      return;
+    }
+
+    // Create positions for terrain sampling
+    const positions = segments.map((segment) =>
+      Cesium.Cartographic.fromDegrees(segment.lon, segment.lat)
+    );
+
+    // Sample terrain heights and add weather entities above terrain
+    Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, positions)
+      .then((sampledPositions: any[]) => {
+        console.log("Terrain sampled for weather visualization");
+
+        segments.forEach((segment, index) => {
+          const sampledPosition = sampledPositions[index];
+          const terrainHeight = sampledPosition.height || 0;
+          const weatherHeight = terrainHeight + 200; // Place weather 200m above terrain
+
+          console.log(`Weather segment ${index + 1}: terrain=${terrainHeight.toFixed(0)}m, weather height=${weatherHeight.toFixed(0)}m, wind=${segment.has_wind}, rain=${segment.has_rain}, snow=${segment.has_snow}`);
+
+          // Add wind arrows (grey, animated) - larger and more visible
+          if (segment.has_wind) {
+            const windArrow = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(
+                segment.lon,
+                segment.lat,
+                weatherHeight
+              ),
+              billboard: {
+                image: createWindArrowCanvas(segment.wind_speed),
+                rotation: Cesium.Math.toRadians(segment.wind_direction + 90),
+                scale: 2.5, // Increased from 1.5
+                color: Cesium.Color.WHITE.withAlpha(0.9), // More opaque
+                disableDepthTestDistance: Number.POSITIVE_INFINITY, // Always visible
+              },
+            });
+            weatherEntitiesRef.current.push(windArrow);
+            console.log(`  ✓ Added wind arrow at ${weatherHeight.toFixed(0)}m`);
+          }
+
+          // Add rain particle system - larger and more visible
+          if (segment.has_rain) {
+            // Create more rain particles with better distribution
+            for (let i = 0; i < 8; i++) {
+              const offsetLon = (Math.random() - 0.5) * 0.003;
+              const offsetLat = (Math.random() - 0.5) * 0.003;
+              const rain = viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(
+                  segment.lon + offsetLon,
+                  segment.lat + offsetLat,
+                  weatherHeight + Math.random() * 100 // Vary height
+                ),
+                point: {
+                  pixelSize: 8, // Increased from 3
+                  color: Cesium.Color.CYAN.withAlpha(0.8), // More opaque
+                  outlineWidth: 1,
+                  outlineColor: Cesium.Color.BLUE.withAlpha(0.3),
+                  disableDepthTestDistance: Number.POSITIVE_INFINITY, // Always visible
+                },
+              });
+              weatherEntitiesRef.current.push(rain);
+            }
+            console.log(`  ✓ Added rain particles at ${weatherHeight.toFixed(0)}m`);
+          }
+
+          // Add snow particle system - smaller particles, more numerous, animated
+          if (segment.has_snow) {
+            // Create many snow particles with better distribution
+            const snowCount = 30; // Increased from 12
+            const windDirection = segment.wind_direction; // Wind direction in degrees
+            const windSpeed = segment.wind_speed; // Wind speed in km/h
+
+            for (let i = 0; i < snowCount; i++) {
+              const offsetLon = (Math.random() - 0.5) * 0.006; // Wider spread
+              const offsetLat = (Math.random() - 0.5) * 0.006;
+              const startHeight = weatherHeight + Math.random() * 300; // Start higher
+
+              // Varying fall speeds for natural look (1.5 to 3.5 m/s)
+              const particleFallSpeed = 1.5 + Math.random() * 2.0;
+
+              // Varying cycle times based on fall speed (faster fall = shorter cycle)
+              const particleCycleTime = 6 + Math.random() * 4; // 6-10 seconds
+
+              // Calculate wind drift (convert wind direction to radians and calculate drift)
+              const windRadians = Cesium.Math.toRadians(windDirection);
+              const horizontalDriftSpeed = windSpeed * 0.3; // Scale wind effect
+              const driftLon = Math.sin(windRadians) * horizontalDriftSpeed * 0.00001;
+              const driftLat = Math.cos(windRadians) * horizontalDriftSpeed * 0.00001;
+
+              // Random start offset in the cycle so particles don't all start together
+              const startTimeOffset = Math.random() * particleCycleTime;
+
+              // Create animated snow particle using CallbackProperty
+              const snow = viewer.entities.add({
+                position: new Cesium.CallbackProperty((time: any) => {
+                  const seconds = Cesium.JulianDate.secondsDifference(time, viewer.clock.startTime) + startTimeOffset;
+                  const t = (seconds % particleCycleTime) / particleCycleTime; // 0 to 1
+
+                  // Calculate current position: fall down + horizontal drift
+                  const currentHeight = startHeight - (t * 300 * particleFallSpeed);
+                  const currentLon = segment.lon + offsetLon + (driftLon * t * 10);
+                  const currentLat = segment.lat + offsetLat + (driftLat * t * 10);
+
+                  return Cesium.Cartesian3.fromDegrees(currentLon, currentLat, currentHeight);
+                }, false),
+                point: {
+                  pixelSize: 5, // Smaller snowflakes
+                  color: Cesium.Color.WHITE.withAlpha(0.85),
+                  outlineColor: Cesium.Color.LIGHTBLUE.withAlpha(0.3),
+                  outlineWidth: 1,
+                  disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                },
+              });
+              weatherEntitiesRef.current.push(snow);
+            }
+            console.log(`  ✓ Added ${snowCount} animated snow particles at ${weatherHeight.toFixed(0)}m with wind drift (dir=${windDirection}°, speed=${windSpeed}km/h)`);
+          }
+        });
+
+        console.log("Weather visualization complete:", weatherEntitiesRef.current.length, "entities added");
+      })
+      .catch((err: any) => {
+        console.warn("Terrain sampling failed for weather, using fixed heights:", err);
+
+        // Fallback: use fixed height well above typical terrain
+        segments.forEach((segment) => {
+          const fallbackHeight = 1500; // High enough for most routes
+
+          if (segment.has_wind) {
+            const windArrow = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(segment.lon, segment.lat, fallbackHeight),
+              billboard: {
+                image: createWindArrowCanvas(segment.wind_speed),
+                rotation: Cesium.Math.toRadians(segment.wind_direction + 90),
+                scale: 2.5,
+                color: Cesium.Color.WHITE.withAlpha(0.9),
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              },
+            });
+            weatherEntitiesRef.current.push(windArrow);
+          }
+
+          if (segment.has_rain) {
+            for (let i = 0; i < 8; i++) {
+              const offsetLon = (Math.random() - 0.5) * 0.003;
+              const offsetLat = (Math.random() - 0.5) * 0.003;
+              const rain = viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(
+                  segment.lon + offsetLon,
+                  segment.lat + offsetLat,
+                  fallbackHeight + Math.random() * 100
+                ),
+                point: {
+                  pixelSize: 8,
+                  color: Cesium.Color.CYAN.withAlpha(0.8),
+                  outlineWidth: 1,
+                  outlineColor: Cesium.Color.BLUE.withAlpha(0.3),
+                  disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                },
+              });
+              weatherEntitiesRef.current.push(rain);
+            }
+          }
+
+          if (segment.has_snow) {
+            const snowCount = 30;
+            const windDirection = segment.wind_direction;
+            const windSpeed = segment.wind_speed;
+
+            for (let i = 0; i < snowCount; i++) {
+              const offsetLon = (Math.random() - 0.5) * 0.006;
+              const offsetLat = (Math.random() - 0.5) * 0.006;
+              const startHeight = fallbackHeight + Math.random() * 300;
+
+              const particleFallSpeed = 1.5 + Math.random() * 2.0;
+              const particleCycleTime = 6 + Math.random() * 4;
+              const startTimeOffset = Math.random() * particleCycleTime;
+
+              const windRadians = Cesium.Math.toRadians(windDirection);
+              const horizontalDriftSpeed = windSpeed * 0.3;
+              const driftLon = Math.sin(windRadians) * horizontalDriftSpeed * 0.00001;
+              const driftLat = Math.cos(windRadians) * horizontalDriftSpeed * 0.00001;
+
+              const snow = viewer.entities.add({
+                position: new Cesium.CallbackProperty((time: any) => {
+                  const seconds = Cesium.JulianDate.secondsDifference(time, viewer.clock.startTime) + startTimeOffset;
+                  const t = (seconds % particleCycleTime) / particleCycleTime;
+
+                  const currentHeight = startHeight - (t * 300 * particleFallSpeed);
+                  const currentLon = segment.lon + offsetLon + (driftLon * t * 10);
+                  const currentLat = segment.lat + offsetLat + (driftLat * t * 10);
+
+                  return Cesium.Cartesian3.fromDegrees(currentLon, currentLat, currentHeight);
+                }, false),
+                point: {
+                  pixelSize: 5,
+                  color: Cesium.Color.WHITE.withAlpha(0.85),
+                  outlineColor: Cesium.Color.LIGHTBLUE.withAlpha(0.3),
+                  outlineWidth: 1,
+                  disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                },
+              });
+              weatherEntitiesRef.current.push(snow);
+            }
+          }
+        });
+
+        console.log("Weather visualization complete (fallback):", weatherEntitiesRef.current.length, "entities added");
+      });
+  }, [activeRoute?.weatherSummary, viewerReady]);
 
   // Highlight selected point
   useEffect(() => {

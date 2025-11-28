@@ -8,7 +8,7 @@ from flask_cors import CORS
 import gpxpy
 import gpxpy.gpx
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 import httpx
 import json
@@ -163,23 +163,32 @@ def get_weather_description(code: int) -> str:
     return codes.get(code, "Unknown")
 
 
-async def fetch_weather_for_route(points: List[Dict], start_time: datetime) -> List[WeatherData]:
+async def fetch_weather_for_route_area(points: List[Dict], start_time: datetime):
     """
-    Fetch weather data from Open-Meteo API for route points.
-    Uses the free, high-accuracy Open-Meteo API suitable for alpine environments.
+    Fetch weather data for the route area, returning weather segments.
+    This creates environmental overlays (wind, rain, snow) rather than point-based weather.
     """
-    weather_data = []
-    
-    # Sample every nth point to reduce API calls
-    sample_rate = max(1, len(points) // 10)
+    if not points:
+        return []
+
+    # Sample points along route to get weather segments
+    sample_rate = max(1, len(points) // 8)  # ~8 weather segments
     sampled_points = points[::sample_rate]
-    
-    async with httpx.AsyncClient() as client:
+
+    print(f"Fetching weather for {len(sampled_points)} route segments...")
+
+    weather_segments = []
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for i, point in enumerate(sampled_points):
             try:
                 # Calculate estimated arrival time at this point
                 arrival_time = start_time + timedelta(seconds=point.get('estimated_time', 0))
-                
+
+                # Ensure arrival_time is timezone-aware (use UTC if naive)
+                if arrival_time.tzinfo is None:
+                    arrival_time = arrival_time.replace(tzinfo=timezone.utc)
+
                 url = "https://api.open-meteo.com/v1/forecast"
                 params = {
                     "latitude": point['lat'],
@@ -188,43 +197,65 @@ async def fetch_weather_for_route(points: List[Dict], start_time: datetime) -> L
                     "forecast_days": 3,
                     "timezone": "auto"
                 }
-                
+
+                print(f"Fetching weather for segment {i+1}/{len(sampled_points)}: lat={point['lat']}, lon={point['lon']}")
+
                 response = await client.get(url, params=params)
                 if response.status_code == 200:
                     data = response.json()
                     hourly = data.get('hourly', {})
-                    
+
                     # Find the closest hour to arrival time
                     times = hourly.get('time', [])
                     hour_index = 0
                     for j, t in enumerate(times):
-                        if datetime.fromisoformat(t) >= arrival_time:
+                        time_dt = datetime.fromisoformat(t)
+                        # Ensure both datetimes have timezone info for comparison
+                        if time_dt.tzinfo is None:
+                            time_dt = time_dt.replace(tzinfo=timezone.utc)
+                        if time_dt >= arrival_time:
                             hour_index = j
                             break
-                    
-                    weather = WeatherData(
-                        temperature=hourly.get('temperature_2m', [15])[hour_index],
-                        precipitation=hourly.get('precipitation', [0])[hour_index],
-                        wind_speed=hourly.get('wind_speed_10m', [0])[hour_index],
-                        wind_direction=hourly.get('wind_direction_10m', [0])[hour_index],
-                        snow_depth=hourly.get('snow_depth', [0])[hour_index] or 0,
-                        weather_code=hourly.get('weather_code', [0])[hour_index],
-                        description=get_weather_description(hourly.get('weather_code', [0])[hour_index])
-                    )
-                    weather_data.append(weather)
+
+                    # Extract weather data
+                    temp = hourly.get('temperature_2m', [15])[hour_index]
+                    precip = hourly.get('precipitation', [0])[hour_index]
+                    wind_speed = hourly.get('wind_speed_10m', [0])[hour_index]
+                    wind_dir = hourly.get('wind_direction_10m', [0])[hour_index]
+                    snow = hourly.get('snow_depth', [0])[hour_index] or 0
+                    weather_code = hourly.get('weather_code', [0])[hour_index]
+
+                    # Determine weather type for visualization
+                    has_rain = precip > 0.5 and snow == 0
+                    has_snow = snow > 0 or (weather_code in [71, 73, 75, 77, 85, 86])
+                    has_wind = wind_speed > 15  # km/h
+
+                    segment = {
+                        'lat': point['lat'],
+                        'lon': point['lon'],
+                        'temperature': temp,
+                        'precipitation': precip,
+                        'wind_speed': wind_speed,
+                        'wind_direction': wind_dir,
+                        'snow_depth': snow,
+                        'weather_code': weather_code,
+                        'description': get_weather_description(weather_code),
+                        'has_rain': has_rain,
+                        'has_snow': has_snow,
+                        'has_wind': has_wind,
+                        'distance_from_start': point.get('distance_from_start', 0)
+                    }
+
+                    print(f"✓ Segment {i+1}: {temp}°C, {get_weather_description(weather_code)}, wind={wind_speed}km/h")
+                    weather_segments.append(segment)
                 else:
-                    weather_data.append(None)
+                    print(f"✗ Weather API returned status {response.status_code} for segment {i+1}")
+
             except Exception as e:
-                print(f"Weather fetch error: {e}")
-                weather_data.append(None)
-    
-    # Interpolate weather for non-sampled points
-    full_weather = []
-    for i in range(len(points)):
-        sample_index = min(i // sample_rate, len(weather_data) - 1)
-        full_weather.append(weather_data[sample_index] if weather_data else None)
-    
-    return full_weather
+                print(f"✗ Weather fetch error for segment {i+1}: {e}")
+
+    print(f"Weather fetch complete: {len(weather_segments)} segments")
+    return weather_segments
 
 
 def parse_gpx(gpx_content: str) -> Dict[str, Any]:
@@ -414,30 +445,33 @@ def get_weather():
         
         start_time = datetime.fromisoformat(start_time_str) if start_time_str else datetime.now()
         
-        # Run async weather fetch
+        # Run async weather fetch for route area
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        weather_data = loop.run_until_complete(fetch_weather_for_route(points, start_time))
+        weather_segments = loop.run_until_complete(fetch_weather_for_route_area(points, start_time))
         loop.close()
-        
-        # Apply weather factors to timing
-        updated_points = []
-        for i, (point, weather) in enumerate(zip(points, weather_data)):
-            weather_factor = get_weather_factor(weather)
-            point['weather_factor'] = weather_factor
-            point['weather'] = asdict(weather) if weather else None
-            
-            # Adjust estimated time with weather
-            if i > 0 and 'estimated_time' in point:
-                prev_time = updated_points[-1].get('estimated_time', 0)
-                segment_time = point['estimated_time'] - points[i-1].get('estimated_time', 0)
-                point['estimated_time'] = prev_time + (segment_time * weather_factor)
-            
-            updated_points.append(point)
-        
+
+        # Calculate weather summary from segments
+        weather_summary = {
+            'available': len(weather_segments) > 0,
+            'segments': weather_segments
+        }
+
+        if weather_segments:
+            weather_summary.update({
+                'temp_range': {
+                    'min': min(s['temperature'] for s in weather_segments),
+                    'max': max(s['temperature'] for s in weather_segments)
+                },
+                'max_wind': max(s['wind_speed'] for s in weather_segments),
+                'total_precipitation': sum(s['precipitation'] for s in weather_segments),
+                'has_snow': any(s['has_snow'] for s in weather_segments),
+                'has_rain': any(s['has_rain'] for s in weather_segments),
+                'conditions': list(set(s['description'] for s in weather_segments))
+            })
+
         return jsonify({
-            'points': updated_points,
-            'weather_summary': summarize_weather(weather_data)
+            'weather_summary': weather_summary
         })
     
     except Exception as e:
