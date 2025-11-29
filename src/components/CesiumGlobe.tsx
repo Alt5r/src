@@ -353,23 +353,33 @@ export default function CesiumGlobe({
           Cesium.CameraEventType.PINCH,
         ];
 
-        // Set initial camera based on route bounds or default location
-        const initialBounds = activeRoute.bounds || HELVELLYN_ROUTE.bounds;
+        // Set initial camera to show entire route
+        const initialRoute = activeRoute.points && activeRoute.points.length > 0 ? activeRoute : HELVELLYN_ROUTE;
         let centerLon = -2.984152;  // Default Helvellyn center
         let centerLat = 54.536135;
-        let altitude = 15000;
+        let altitude = 20000;
 
-        if (initialBounds) {
-          centerLon = (initialBounds.min_lon + initialBounds.max_lon) / 2;
-          centerLat = (initialBounds.min_lat + initialBounds.max_lat) / 2;
+        // Calculate center using actual route points with southward offset
+        if (initialRoute.points && initialRoute.points.length > 0 && initialRoute.bounds) {
+          const bounds = initialRoute.bounds;
 
-          // Calculate altitude to fit entire route in view
-          const latDiff = initialBounds.max_lat - initialBounds.min_lat;
-          const lonDiff = initialBounds.max_lon - initialBounds.min_lon;
-          const maxDiff = Math.max(latDiff, lonDiff);
+          // Use average of all route points for true center
+          const sumLon = initialRoute.points.reduce((sum, p) => sum + p.lon, 0);
+          const sumLat = initialRoute.points.reduce((sum, p) => sum + p.lat, 0);
+          centerLon = sumLon / initialRoute.points.length;
+          centerLat = sumLat / initialRoute.points.length;
 
-          // Altitude in meters - scale based on route size
-          altitude = Math.max(5000, maxDiff * 150000);
+          // Calculate southward offset based on north-south span
+          const latSpan = bounds.max_lat - bounds.min_lat;
+          const southwardOffset = latSpan * 2; // Shift camera south by 2x the north-south span
+          centerLat = centerLat - southwardOffset;
+
+          // Calculate altitude based on bounds to fit entire route
+          const lonDiff = bounds.max_lon - bounds.min_lon;
+          const maxDiff = Math.max(latSpan, lonDiff);
+
+          // Altitude scaling with extra padding for full route visibility
+          altitude = Math.max(10000, maxDiff * 250000);
         }
 
         viewer.camera.flyTo({
@@ -495,9 +505,84 @@ export default function CesiumGlobe({
       Cesium.Cartographic.fromDegrees(point.lon, point.lat)
     );
 
+    // Function to calculate difficulty factor for color coding
+    const calculateDifficultyFactor = (index: number): number => {
+      if (index >= activeRoute.points.length) return 0;
+
+      const point = activeRoute.points[Math.min(index, activeRoute.points.length - 1)];
+      let difficulty = 0;
+
+      // Factor 1: Gradient (0 to 1, where 1 is steepest)
+      const gradient = Math.abs(point.gradient || 0);
+      const gradientFactor = Math.min(gradient / 20, 1); // 20% gradient = max red
+      difficulty += gradientFactor * 0.5; // 50% weight
+
+      // Factor 2: Terrain factor (0 to 1)
+      const terrainFactor = point.terrain_factor || 1;
+      const terrainDifficulty = Math.max(0, (terrainFactor - 1) / 0.5); // 1.5 terrain factor = max
+      difficulty += terrainDifficulty * 0.3; // 30% weight
+
+      // Factor 3: Weather impact (0 to 1)
+      const weatherFactor = point.weather_factor || 0;
+      const weatherDifficulty = Math.min(weatherFactor / 0.3, 1); // 0.3 weather factor = max
+      difficulty += weatherDifficulty * 0.2; // 20% weight
+
+      return Math.min(difficulty, 1); // Clamp to 0-1
+    };
+
+    // Function to get color from difficulty factor (0=green, 1=red)
+    const getColorFromDifficulty = (difficulty: number): any => {
+      // Ultra-smooth gradient with more color stops:
+      // Green -> Light Green -> Yellow-Green -> Yellow -> Orange-Yellow -> Orange -> Red-Orange -> Red
+
+      if (difficulty < 0.15) {
+        // Pure Green to Light Green
+        const t = difficulty / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(0 + 100 * t)}, ${Math.round(255)}, ${Math.round(0)})`
+        );
+      } else if (difficulty < 0.30) {
+        // Light Green to Yellow-Green
+        const t = (difficulty - 0.15) / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(100 + 100 * t)}, ${Math.round(255)}, ${Math.round(0)})`
+        );
+      } else if (difficulty < 0.45) {
+        // Yellow-Green to Yellow
+        const t = (difficulty - 0.30) / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(200 + 55 * t)}, ${Math.round(255)}, ${Math.round(0)})`
+        );
+      } else if (difficulty < 0.60) {
+        // Yellow to Orange-Yellow
+        const t = (difficulty - 0.45) / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(255)}, ${Math.round(255 - 50 * t)}, ${Math.round(0)})`
+        );
+      } else if (difficulty < 0.75) {
+        // Orange-Yellow to Orange
+        const t = (difficulty - 0.60) / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(255)}, ${Math.round(205 - 50 * t)}, ${Math.round(0)})`
+        );
+      } else if (difficulty < 0.90) {
+        // Orange to Red-Orange
+        const t = (difficulty - 0.75) / 0.15;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(255)}, ${Math.round(155 - 80 * t)}, ${Math.round(0)})`
+        );
+      } else {
+        // Red-Orange to Pure Red
+        const t = (difficulty - 0.90) / 0.10;
+        return Cesium.Color.fromCssColorString(
+          `rgb(${Math.round(255)}, ${Math.round(75 - 75 * t)}, ${Math.round(0)})`
+        );
+      }
+    };
+
     // Sample terrain heights and create the route line
     const terrainProvider = viewer.terrainProvider;
-    
+
     Cesium.sampleTerrainMostDetailed(terrainProvider, cartographicPositions)
       .then((sampledPositions: any[]) => {
         // Create positions with terrain height + offset to sit above terrain
@@ -511,55 +596,87 @@ export default function CesiumGlobe({
           );
         });
 
-        // Add route line - solid red color, follows terrain
-        routeEntityRef.current = viewer.entities.add({
-          polyline: {
-            positions: positions,
-            width: 3,
-            material: Cesium.Color.RED,
-            clampToGround: false,
-            arcType: Cesium.ArcType.NONE,
-          },
-        });
+        // Calculate colors for each segment
+        const colors: any[] = [];
+        for (let i = 0; i < positions.length; i++) {
+          // Map densified point index back to original route point index
+          const routeIndex = Math.floor((i / densifiedPoints.length) * activeRoute.points.length);
+          const difficulty = calculateDifficultyFactor(routeIndex);
+          colors.push(getColorFromDifficulty(difficulty));
+        }
 
-        // Also add a wider translucent glow behind the main line
-        glowEntityRef.current = viewer.entities.add({
-          polyline: {
-            positions: positions,
-            width: 8,
-            material: Cesium.Color.RED.withAlpha(0.3),
-            clampToGround: false,
-            arcType: Cesium.ArcType.NONE,
-          },
-        });
+        // Create gradient route by drawing individual colored segments
+        console.log(`Drawing route with ${positions.length} segments using difficulty-based colors`);
+
+        for (let i = 0; i < positions.length - 1; i++) {
+          const segmentColor = colors[i] || Cesium.Color.GREEN;
+
+          // Main route line segment
+          viewer.entities.add({
+            polyline: {
+              positions: [positions[i], positions[i + 1]],
+              width: 3,
+              material: segmentColor,
+              clampToGround: false,
+              arcType: Cesium.ArcType.NONE,
+            },
+          });
+
+          // Glow segment
+          viewer.entities.add({
+            polyline: {
+              positions: [positions[i], positions[i + 1]],
+              width: 8,
+              material: segmentColor.withAlpha(0.3),
+              clampToGround: false,
+              arcType: Cesium.ArcType.NONE,
+            },
+          });
+        }
+
+        console.log(`Route gradient complete: Green=easy, Yellow=moderate, Red=difficult`);
       })
       .catch((err: any) => {
         console.warn("Terrain sampling failed, falling back to GPX elevations:", err);
-        
+
         // Fallback: use GPX elevations with offset
         const positions = activeRoute.points.map((point) =>
           Cesium.Cartesian3.fromDegrees(point.lon, point.lat, (point.elevation || 0) + 10)
         );
 
-        routeEntityRef.current = viewer.entities.add({
-          polyline: {
-            positions: positions,
-            width: 3,
-            material: Cesium.Color.RED,
-            clampToGround: false,
-            arcType: Cesium.ArcType.NONE,
-          },
-        });
+        // Calculate colors for each point in fallback mode
+        const colors: any[] = [];
+        for (let i = 0; i < activeRoute.points.length; i++) {
+          const difficulty = calculateDifficultyFactor(i);
+          colors.push(getColorFromDifficulty(difficulty));
+        }
 
-        glowEntityRef.current = viewer.entities.add({
-          polyline: {
-            positions: positions,
-            width: 8,
-            material: Cesium.Color.RED.withAlpha(0.3),
-            clampToGround: false,
-            arcType: Cesium.ArcType.NONE,
-          },
-        });
+        // Create gradient route segments
+        for (let i = 0; i < positions.length - 1; i++) {
+          const segmentColor = colors[i] || Cesium.Color.GREEN;
+
+          viewer.entities.add({
+            polyline: {
+              positions: [positions[i], positions[i + 1]],
+              width: 3,
+              material: segmentColor,
+              clampToGround: false,
+              arcType: Cesium.ArcType.NONE,
+            },
+          });
+
+          viewer.entities.add({
+            polyline: {
+              positions: [positions[i], positions[i + 1]],
+              width: 8,
+              material: segmentColor.withAlpha(0.3),
+              clampToGround: false,
+              arcType: Cesium.ArcType.NONE,
+            },
+          });
+        }
+
+        console.log(`Route gradient complete (fallback): Green=easy, Yellow=moderate, Red=difficult`);
       });
 
     // Add waypoints at intervals
@@ -626,19 +743,27 @@ export default function CesiumGlobe({
       }
     });
 
-    // Fly to route bounds with smooth animation
-    if (activeRoute.bounds) {
+    // Fly to show entire route
+    if (activeRoute.points && activeRoute.points.length > 0 && activeRoute.bounds) {
       const bounds = activeRoute.bounds;
-      const centerLon = (bounds.min_lon + bounds.max_lon) / 2;
-      const centerLat = (bounds.min_lat + bounds.max_lat) / 2;
 
-      // Calculate altitude to fit entire route in view
-      const latDiff = bounds.max_lat - bounds.min_lat;
+      // Use average of all route points for true center
+      const sumLon = activeRoute.points.reduce((sum, p) => sum + p.lon, 0);
+      const sumLat = activeRoute.points.reduce((sum, p) => sum + p.lat, 0);
+      let centerLon = sumLon / activeRoute.points.length;
+      let centerLat = sumLat / activeRoute.points.length;
+
+      // Calculate southward offset based on north-south span
+      const latSpan = bounds.max_lat - bounds.min_lat;
+      const southwardOffset = latSpan * 2; // Shift camera south by 2x the north-south span
+      centerLat = centerLat - southwardOffset;
+
+      // Calculate altitude based on bounds to fit entire route
       const lonDiff = bounds.max_lon - bounds.min_lon;
-      const maxDiff = Math.max(latDiff, lonDiff);
+      const maxDiff = Math.max(latSpan, lonDiff);
 
-      // Altitude in meters - scale based on route size
-      const altitude = Math.max(5000, maxDiff * 150000);
+      // Altitude scaling with extra padding for full route visibility
+      const altitude = Math.max(10000, maxDiff * 250000);
 
       viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, altitude),

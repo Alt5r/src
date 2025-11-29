@@ -228,7 +228,7 @@ async def fetch_weather_for_route_area(points: List[Dict], start_time: datetime)
                     # Determine weather type for visualization
                     has_rain = precip > 0.5 and snow == 0
                     has_snow = snow > 0 or (weather_code in [71, 73, 75, 77, 85, 86])
-                    has_wind = wind_speed > 15  # km/h
+                    has_wind = wind_speed > 5  # km/h (lowered threshold for visibility)
 
                     segment = {
                         'lat': point['lat'],
@@ -246,7 +246,7 @@ async def fetch_weather_for_route_area(points: List[Dict], start_time: datetime)
                         'distance_from_start': point.get('distance_from_start', 0)
                     }
 
-                    print(f"✓ Segment {i+1}: {temp}°C, {get_weather_description(weather_code)}, wind={wind_speed}km/h")
+                    print(f"✓ Segment {i+1}: {temp}°C, {get_weather_description(weather_code)}, wind={wind_speed}km/h @ {wind_dir}° | rain={has_rain}, snow={has_snow}, wind_arrow={has_wind}")
                     weather_segments.append(segment)
                 else:
                     print(f"✗ Weather API returned status {response.status_code} for segment {i+1}")
